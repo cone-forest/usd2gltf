@@ -1,6 +1,19 @@
 import argparse
 import sys
 import logging
+
+try:
+    import pxr  # noqa: F401 — OpenUSD; PyPI package name is usd-core
+except ImportError:
+    print(
+        "usd2gltf needs OpenUSD Python bindings (the `pxr` module).\n"
+        "  • With pip: install a supported Python (3.9–3.13), then: pip install usd-core\n"
+        "  • The `usd-core` wheel on PyPI does not support Python 3.14 yet.\n"
+        "  • Or use a Pixar USD build and add its `lib/python` (or equivalent) to PYTHONPATH.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 import usd2gltf.converter as converter
 
 

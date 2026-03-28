@@ -28,7 +28,8 @@ optional arguments:
 
 ## Requirements
 
-- usd-core (Or custom Pixar USD build)
+- **Python 3.9–3.13** — The [`usd-core`](https://pypi.org/project/usd-core/) wheels on PyPI do not support Python 3.14 yet, so `pip install usd-core` will not resolve on 3.14. Use 3.13 (or earlier) for the virtualenv, or supply your own USD build with `pxr` on `PYTHONPATH`.
+- **OpenUSD (`pxr`)** — Usually via `pip install usd-core`; or a custom Pixar USD build whose Python bindings are on `PYTHONPATH`.
 - gltflib
 - numpy
 

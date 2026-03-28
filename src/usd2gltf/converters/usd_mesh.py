@@ -60,12 +60,39 @@ def _process_mesh_attribute(
 def _get_triangulated_attribute(
     count_array, index_array, is_index=False, isLeftHanded=True 
 ):
+    """Fan-triangulate each face. `index_array` must align with `count_array` (one
+    entry per face corner). Shorter buffers are padded so we still emit ``count-2``
+    triangles per face with ``count >= 3``, matching topology from vertex indices.
+    """
     return_array = []
+    if count_array is None or index_array is None:
+        return return_array
     j = 0
+    n_total = len(index_array)
     for count in count_array:
-        poly = index_array[j: j + count]
-
-        for i in range(count - 2):  # This is a trick for triangulating ngons
+        chunk = index_array[j : j + count]
+        # Vt.*Array returns None for out-of-range slices (not an empty list).
+        poly = [] if chunk is None else list(chunk)
+        j += count
+        if count < 3:
+            continue
+        if len(poly) < count:
+            short = len(poly)
+            if len(poly) > 0:
+                pad = poly[-1]
+            elif n_total > 0:
+                pad = index_array[n_total - 1]
+            else:
+                continue
+            while len(poly) < count:
+                poly.append(pad)
+            logger.debug(
+                "Face-varying attribute shorter than faceVertexCounts "
+                "(expected %s values for this face, got %s); padded with last sample.",
+                count,
+                short,
+            )
+        for i in range(count - 2):
             tmp = []
             if isLeftHanded:
                 tmp = [poly[0], poly[i + 2], poly[i + 1]]
@@ -75,8 +102,6 @@ def _get_triangulated_attribute(
                 return_array.append(tmp)
             else:
                 return_array.extend(tmp)
-
-        j += count
 
     return return_array
 
@@ -350,12 +375,21 @@ def convert(converter, usd_mesh):
 
                     logger.debug("   - color: {0} : {1}".format(color_name, color_idx))
 
-                    if "constant" in displayColor.GetInterpolation():
+                    if rawColors is None or len(rawColors) == 0:
+                        logger.warning(
+                            "displayColor %s on %s has no samples; skipping vertex colors.",
+                            color_name,
+                            ppath,
+                        )
+                    elif "constant" in displayColor.GetInterpolation():
                         convertedColors = [rawColors[0]] * len(sub_index_array)
 
                     elif "faceVarying" in displayColor.GetInterpolation():
+                        # Flatten so array length matches sum(faceVertexCounts) (raw
+                        # authored arrays are often shorter in DCC/game exports).
+                        fv_colors = common._GetFlattenedStaticValue(displayColor)
                         cd = _get_triangulated_attribute(
-                            faces, rawColors, is_index=True, isLeftHanded=isLeftHanded
+                            faces, fv_colors, is_index=True, isLeftHanded=isLeftHanded
                         )
                         convertedColors = [cd[int(x)] for x in sub_tri_indices]
 
@@ -366,19 +400,20 @@ def convert(converter, usd_mesh):
                         rawColors = common._GetFlattenedStaticValue(displayColor)
                         convertedColors = [rawColors[int(x)] for x in sub_index_array]
 
-                    convertedColors = np.array(convertedColors, "float32")
-                    convertedColors = convertedColors.reshape(
-                        -1, convertedColors.shape[-1]
-                    )
-                    _process_mesh_attribute(
-                        converter,
-                        convertedColors,
-                        min=convertedColors.min(axis=0).tolist(),
-                        max=convertedColors.max(axis=0).tolist(),
-                    )
-                    primitives[sub_idx].attributes.COLOR_0 = (
-                        len(converter.gltfDoc.accessors) - 1
-                    )
+                    if len(convertedColors) > 0:
+                        convertedColors = np.array(convertedColors, "float32")
+                        convertedColors = convertedColors.reshape(
+                            -1, convertedColors.shape[-1]
+                        )
+                        _process_mesh_attribute(
+                            converter,
+                            convertedColors,
+                            min=convertedColors.min(axis=0).tolist(),
+                            max=convertedColors.max(axis=0).tolist(),
+                        )
+                        primitives[sub_idx].attributes.COLOR_0 = (
+                            len(converter.gltfDoc.accessors) - 1
+                        )
 
         # Material Binding
 

@@ -37,11 +37,33 @@ def _get_triangulated_attribute(
     count_array, index_array, is_index=False, isLeftHanded=True
 ):
     return_array = []
+    if count_array is None or index_array is None:
+        return return_array
     j = 0
+    n_total = len(index_array)
     for count in count_array:
-        poly = index_array[j : j + count]
-
-        for i in range(count - 2):  # This is a trick for triangulating ngons
+        chunk = index_array[j : j + count]
+        poly = [] if chunk is None else list(chunk)
+        j += count
+        if count < 3:
+            continue
+        if len(poly) < count:
+            short = len(poly)
+            if len(poly) > 0:
+                pad = poly[-1]
+            elif n_total > 0:
+                pad = index_array[n_total - 1]
+            else:
+                continue
+            while len(poly) < count:
+                poly.append(pad)
+            logger.debug(
+                "Face-varying attribute shorter than faceVertexCounts "
+                "(expected %s values for this face, got %s); padded with last sample.",
+                count,
+                short,
+            )
+        for i in range(count - 2):
             tmp = []
             if isLeftHanded:
                 tmp = [poly[0], poly[i + 2], poly[i + 1]]
@@ -51,8 +73,6 @@ def _get_triangulated_attribute(
                 return_array.append(tmp)
             else:
                 return_array.extend(tmp)
-
-        j += count
 
     return return_array
 
@@ -150,9 +170,14 @@ def add_weights(converter, gltfMesh, usd_mesh):
         sub_index_array = sub_index_array.flatten()
 
         skelBinding = UsdSkel.BindingAPI(usd_mesh)
+        skel = skelBinding.GetSkeleton()
+        if not skel:
+            return
 
-        allJoints = skelBinding.GetSkeleton().GetJointsAttr().Get()
-        allJoints = [x for x in allJoints]
+        allJoints = skel.GetJointsAttr().Get()
+        if not allJoints:
+            return
+        allJoints = list(allJoints)
 
         meshJointsAttr = UsdGeom.Primvar(skelBinding.GetJointsAttr())
         meshJoints = meshJointsAttr.Get()
@@ -162,7 +187,37 @@ def add_weights(converter, gltfMesh, usd_mesh):
         jointIndicesInterpolation = jointIdcsPrimvar.GetInterpolation()
         jt_influences = jointIdcsPrimvar.GetElementSize()
 
-        remappedJointIdcs = [allJoints.index(meshJoints[x]) for x in jointIdcs]
+        if not meshJoints or jointIdcs is None:
+            return
+
+        remappedJointIdcs = []
+        prim_path = usd_mesh.GetPrim().GetPath()
+        for x in jointIdcs:
+            xi = int(x)
+            if xi < 0 or xi >= len(meshJoints):
+                logger.warning(
+                    "Joint index %s out of range for mesh %s; skipping skin weights.",
+                    xi,
+                    prim_path,
+                )
+                return
+            mj = meshJoints[xi]
+            if mj is None:
+                logger.warning(
+                    "Unset joint token at index %s for mesh %s; skipping skin weights.",
+                    xi,
+                    prim_path,
+                )
+                return
+            try:
+                remappedJointIdcs.append(allJoints.index(mj))
+            except ValueError:
+                logger.warning(
+                    "Joint %r not in skeleton for mesh %s; skipping skin weights.",
+                    mj,
+                    prim_path,
+                )
+                return
 
         jtIdcs = []
         if jointIndicesInterpolation == "vertex":
@@ -183,11 +238,7 @@ def add_weights(converter, gltfMesh, usd_mesh):
 
         num_weights_influences = jointWeightsPrimvar.GetElementSize()
 
-        if not skelBinding.GetSkeleton():
-            # Early out for when primvars/weights exist, but no skeleton is provided
-            return
-
-        skeleton_path = skelBinding.GetSkeleton().GetPrim().GetPrimPath()
+        skeleton_path = skel.GetPrim().GetPrimPath()
 
         # orientation = usd_mesh.GetOrientationAttr().Get()
         # isLeftHanded = orientation == UsdGeom.Tokens.leftHanded
